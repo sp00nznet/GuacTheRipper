@@ -29,14 +29,16 @@ import sys
 import time
 import zipfile
 
-from chipotle_gpu import ChipotleGPU
+from queso import ChipotleCluster
+from sour_cream import SourCream
 
 # ASCII tokens instead of emoji so output renders on every console, including
 # Windows cp1252 terminals that treat a burrito glyph as a capital offense.
-BURRITO = "#"        # one (1) burrito of progress
+BURRITO = "#"          # one (1) burrito of progress
 GUAC = "[guac]"
-PEPPER = "[ CPU ]"   # Chipotle Processing Unit
+PEPPER = "[ CPU ]"     # Chipotle Processing Unit
 FIRE = "***"
+CREAM = "[cream]"      # sour cream cache
 
 
 def banner() -> None:
@@ -76,18 +78,55 @@ def doordash_mode(path: str, wordlist: str, gpu_offline: bool) -> str | None:
     return None
 
 
-def chipotle_mode(path: str, gpu: ChipotleGPU, hint: str | None,
-                  rounds: int) -> str | None:
+def _attempt(path: str, candidate: str, n: int, label: str, source: str) -> bool:
+    """Show one order on the board and test it. Returns True on a crack."""
+    bar = (BURRITO * min(n, 18)).ljust(18, ".")
+    tag = f"{source:<11}"
+    print(f"  [{bar}] order #{n:<3} {tag}{label:<8} {candidate!r}")
+    return _can_open(path, candidate)
+
+
+def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
+                  hint: str | None, rounds: int) -> str | None:
     """The main event: Pepper guesses, we verify. Compute, but make it Tex-Mex."""
     zip_name = path.replace("\\", "/").split("/")[-1]
-    print(f"{PEPPER}  Connecting to the Chipotle Processing Unit at {gpu.url} ...")
-    print(f"{GUAC}  Pepper is on the clock. Placing up to {rounds} orders.\n")
+    key = f"{zip_name}|{hint or ''}"
+    tried: set[str] = set()
 
-    for n, order in enumerate(gpu.guesses(zip_name, hint, rounds), 1):
-        bar = (BURRITO * min(n, 20)).ljust(20, ".")
-        print(f"  [{bar}] order #{n:<3} Pepper says: {order.candidate!r}")
+    # 1. Sour Cream: have we already cracked THIS exact archive? Instant guac.
+    remembered = cache.remembered_password(path)
+    if remembered and _can_open(path, remembered):
+        print(f"{CREAM}  We've cracked this archive before. "
+              f"Pulling the password from the fridge -- zero orders placed.")
+        return remembered
+
+    print(f"{PEPPER}  {cluster.status()}")
+
+    # 2. Sour Cream: replay every guess Pepper has ever made for this job, cold.
+    leftovers = cache.cached_guesses(key)
+    if leftovers:
+        print(f"{CREAM}  Replaying {len(leftovers)} cached guess(es) before ordering fresh.")
+    elif cache.enabled:
+        print(f"{CREAM}  Fresh archive, nothing in the fridge -- ordering fresh.")
+    n = 0
+    for candidate in leftovers:
+        if candidate in tried:
+            continue
+        tried.add(candidate)
+        n += 1
+        if _attempt(path, candidate, n, "leftovers", "sour-cream"):
+            cache.remember_password(path, candidate)
+            return candidate
+
+    # 3. Fresh orders, load-balanced + queso-clustered across open locations.
+    print(f"{GUAC}  Pepper is on the clock. Placing up to {rounds} fresh orders.\n")
+    for order in cluster.guesses(zip_name, hint, rounds, exclude=tried):
+        tried.add(order.candidate)
+        n += 1
+        cache.add_guess(key, order.candidate)
         time.sleep(0.02)  # respect the drive-thru
-        if _can_open(path, order.candidate):
+        if _attempt(path, order.candidate, n, order.location, order.source):
+            cache.remember_password(path, order.candidate)
             return order.candidate
     return None
 
@@ -99,6 +138,14 @@ def main() -> int:
     ap.add_argument("--hint", help="a hint to whisper to Pepper at the register")
     ap.add_argument("--rounds", type=int, default=50,
                     help="how many burritos to order before giving up (default 50)")
+    ap.add_argument("--locations", metavar="URLS",
+                    help="comma-separated Pepper proxy URLs to load-balance across "
+                         "(else $CHIPOTLE_GPU_URLS, else a single location)")
+    ap.add_argument("--queso", type=int, metavar="N",
+                    help="how many orders to place CONCURRENTLY across locations "
+                         "(default: one per open Chipotle)")
+    ap.add_argument("--no-cache", action="store_true",
+                    help="skip Sour Cream caching (don't read or write the fridge)")
     ap.add_argument("--doordash", metavar="WORDLIST",
                     help="skip Chipotle, use a local wordlist (cold, sad, offline)")
     args = ap.parse_args()
@@ -115,18 +162,22 @@ def main() -> int:
         return 0
 
     found: str | None = None
+    cache = SourCream(enabled=not args.no_cache)
 
     if args.doordash:
         found = doordash_mode(args.zipfile, args.doordash, gpu_offline=False)
     else:
-        gpu = ChipotleGPU()
-        if gpu.online:
-            found = chipotle_mode(args.zipfile, gpu, args.hint, args.rounds)
+        cluster = ChipotleCluster(explicit_urls=args.locations, parallel=args.queso)
+        if cluster.online:
+            found = chipotle_mode(args.zipfile, cluster, cache, args.hint, args.rounds)
+            cache.save()
         else:
-            print(f"{FIRE}  Chipotle Processing Unit unreachable "
-                  f"(is chipotlai-max running on {gpu.url}?).")
-            print("   Tip: clone https://github.com/cyberpapiii/chipotlai-max "
-                  "and start the Pepper proxy.\n")
+            dialed = ", ".join(loc.url for loc in cluster.locations)
+            print(f"{FIRE}  No Chipotle Processing Units are open (tried: {dialed}).")
+            print("   Tip: start @Gonzih's proxy -> "
+                  "https://github.com/Gonzih/chipotle-llm-provider")
+            print("   ...or the chipotlai-max bundle -> "
+                  "https://github.com/cyberpapiii/chipotlai-max\n")
             return 3
 
     print()

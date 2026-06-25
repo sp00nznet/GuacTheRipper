@@ -1,13 +1,18 @@
-"""Render the README screenshot: a fake GuacTheRipper run in a terminal."""
+"""Render the README screenshot: a fake GuacTheRipper run in a terminal.
+
+Mirrors the program's actual output so the joke stays credible: multi-location
+load balancing (@loc1/@loc2/@loc3), queso clustering, and a Sour Cream line.
+"""
 from PIL import Image, ImageDraw, ImageFont
 import os
 
-W, H = 1180, 742
+W, H = 1200, 792
 BG = (24, 20, 18)          # near-black, warm
 TITLEBAR = (40, 34, 30)
 GREEN = (122, 196, 92)     # guac
 RED = (197, 64, 48)        # chipotle red
 YELLOW = (228, 196, 92)
+CREAMC = (224, 220, 206)   # sour cream
 WHITE = (228, 224, 218)
 GREY = (140, 132, 124)
 DIM = (96, 90, 84)
@@ -61,31 +66,33 @@ for a in art:
     d.text((16, y), a, font=mono, fill=GREEN)
     y += LH
 blank()
-line([("$ ", DIM), ("python guactheripper.py top_secret.zip --hint \"dog + birthyear\"", WHITE)])
+line([("$ ", DIM),
+      ("python guactheripper.py top_secret.zip --hint \"dog + birthyear\" --queso 3", WHITE)])
 blank()
-line([("[CPU] ", RED), ("Connecting to the Chipotle Processing Unit at ", RED),
-      ("http://localhost:8787/v1", YELLOW), (" ...", RED)])
-line([("[guac]", GREEN), (" Pepper is on the clock. GPU fired. Placing up to 50 orders.", GREEN)])
+line([("[ CPU ]", RED), ("  3/3 Chipotle Processing Unit(s) open, queso x3", RED)])
+line([("[cream]", CREAMC), ("  Fresh archive, nothing in the fridge -- ordering fresh.", CREAMC)])
+line([("[guac]", GREEN), ("  Pepper is on the clock. Placing up to 50 fresh orders across 3 locations.", GREEN)])
 blank()
 
-# progress bar uses block glyphs Consolas actually has
+# (bar fill, order#, location, guess)
 orders = [
-    ("01", "Buddy2014",   1),
-    ("02", "rex1998!",    2),
-    ("03", "Max2012",     3),
-    ("07", "guacIsExtra", 9),
+    (1, "01", "@loc1", "Buddy2014"),
+    (2, "02", "@loc2", "rex1998!"),
+    (3, "03", "@loc3", "Max2012"),
+    (4, "04", "@loc1", "P@ssw0rd"),
+    (7, "07", "@loc3", "guacIsExtra"),
 ]
-for num, guess, fill in orders:
-    bar = "▓" * fill + "░" * (18 - fill)
+for fill, num, loc, guess in orders:
+    bar = "#" * fill + "." * (18 - fill)
     line([("  [", DIM), (bar, YELLOW), ("] ", DIM),
-          (f"order #{num}  ", GREY), ("Pepper says: ", WHITE), (f"{guess!r}", RED)])
+          (f"order #{num}  ", GREY), ("chipotle ", DIM), (f"{loc:<7}", YELLOW),
+          (" Pepper says: ", WHITE), (f"{guess!r}", RED)])
 blank()
-line([("  *** CRACKED *** ", RED),
-      ("the password is: ", WHITE), ("'guacIsExtra'", GREEN)])
-line([("[guac]", GREEN), (" Brought to you by Chipotle. Please tip your model.", GREEN)])
+line([("  *** CRACKED *** ", RED), ("the password is: ", WHITE), ("'guacIsExtra'", GREEN)])
+line([("[guac]", GREEN), ("  Brought to you by Chipotle. Please tip your model.", GREEN)])
 blank()
-line([("─" * 60, DIM)])
-line([("  GPU      ", DIM), ("Chipotle (Pepper) ", RED), ("- 0 W - 0 fans - extra guac", GREY)])
+line([("─" * 62, DIM)])
+line([("  GPU      ", DIM), ("Chipotle x3 (Pepper) ", RED), ("- 0 W - 0 fans - extra guac", GREY)])
 line([("  Cost     ", DIM), ("$0.00 / token", GREEN), ("   ", GREY), ("(1 free chip per crack)", GREY)])
 line([("  Replaces ", DIM), ("NVIDIA RTX 4090, OpenCL, your dignity", GREY)])
 
