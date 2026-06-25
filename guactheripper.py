@@ -32,10 +32,12 @@ import zipfile
 
 from budget import Budget
 from chips import BASKET
+from feedback import Feedback
 from providers import PROVIDERS
 from queso import ChipotleCluster
 from receipts import write_receipt
 from sour_cream import SourCream
+from sticker_book import StickerBook
 from toppings import toppings
 
 # --heat maps to how spicy Pepper runs (temperature) and how loaded the bowl gets.
@@ -49,6 +51,7 @@ PEPPER = "[ CPU ]"     # Chipotle Processing Unit
 FIRE = "***"
 CREAM = "[cream]"      # sour cream cache
 CHIPS = "[chips]"      # the free chips basket
+LOYAL = "[loyal]"      # the sticker book
 
 
 def banner() -> None:
@@ -105,7 +108,8 @@ def _show(n: int, base: str, label: str, source: str, note: str = "") -> None:
 
 def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
                   hint: str | None, rounds: int, heat: str, use_toppings: bool,
-                  use_chips: bool, budget: Budget) -> tuple[str | None, int, str]:
+                  use_chips: bool, budget: Budget,
+                  use_feedback: bool) -> tuple[str | None, int, str]:
     """The main event: chips, then the fridge, then Pepper guesses + Toppings.
 
     Returns (password_or_None, orders_placed, serving_location)."""
@@ -114,6 +118,7 @@ def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
     bot = cluster.provider.bot
     tried: set[str] = set()
     orders_placed = 0  # only counts real Pepper orders (chips/leftovers are free)
+    feedback = Feedback(enabled=use_feedback)  # Burrito-of-the-day learning board
 
     # 1. Sour Cream: have we already cracked THIS exact archive? Instant guac.
     remembered = cache.remembered_password(path)
@@ -156,15 +161,18 @@ def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
                 print(f"           + topping {win!r} cracked it")
             cache.remember_password(path, win)
             return win, 0, "the fridge"
+        feedback.reject(base)
 
-    # 4. Fresh orders: load-balanced, queso-clustered, ordering ahead.
+    # 4. Fresh orders: load-balanced, queso-clustered, ordering ahead, learning.
     if budget.exhausted():
         print(f"{GUAC}  Burrito budget already spent -- no fresh orders this run.")
         return None, 0, ""
     cap = min(rounds, budget.remaining()) if budget.remaining() is not None else rounds
+    learn = "learning from misses, " if use_feedback else ""
     print(f"{GUAC}  {bot} is on the clock. Placing up to {cap} fresh orders "
-          f"(ordering ahead).\n")
-    for order in cluster.guesses(zip_name, hint, rounds, exclude=tried, budget=budget):
+          f"({learn}ordering ahead).\n")
+    for order in cluster.guesses(zip_name, hint, rounds, exclude=tried,
+                                 budget=budget, feedback=feedback):
         tried.add(order.candidate)
         n += 1
         orders_placed += 1
@@ -177,6 +185,7 @@ def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
                 print(f"           + topping {win!r} cracked it")
             cache.remember_password(path, win)
             return win, orders_placed, order.location
+        feedback.reject(order.candidate)
 
     if budget.exhausted():
         print(f"{BURRITO}  Burrito budget spent ({budget.spent} orders). "
@@ -195,7 +204,8 @@ def _expand(patterns: list[str]) -> list[str]:
     return [p for p in out if not (p in seen or seen.add(p))]
 
 
-def crack_one(path: str, args, cluster, cache, budget: Budget) -> str | None:
+def crack_one(path: str, args, cluster, cache, budget: Budget,
+              book: StickerBook) -> str | None:
     """Crack a single archive. Returns the password, or None."""
     print(f"\n{'=' * 64}\n  {path}\n{'=' * 64}")
     brand = cluster.provider.label if cluster else "the neighborhood"
@@ -213,7 +223,8 @@ def crack_one(path: str, args, cluster, cache, budget: Budget) -> str | None:
     else:
         found, orders, served = chipotle_mode(
             path, cluster, cache, args.hint, args.rounds, args.heat,
-            not args.no_toppings, not args.no_chips, budget)
+            not args.no_toppings, not args.no_chips, budget,
+            not args.no_feedback)
         cache.save()
 
     print()
@@ -229,6 +240,13 @@ def crack_one(path: str, args, cluster, cache, budget: Budget) -> str | None:
                 title=(prov.receipt_title if prov else "DOORDASH"))
             if rcpt:
                 print(f"{CREAM}  Receipt printed -> {rcpt}")
+        if book.enabled and found:  # loyalty stamp (unencrypted "" doesn't count)
+            ev = book.add_crack()
+            print(f"{LOYAL}  Loyalty stamp earned!  {StickerBook.card(ev['filled'])}"
+                  f"   lifetime cracks: {ev['total']}")
+            if ev["reward"]:
+                print(f"{LOYAL}  *** TENTH STAMP! *** Your next crack is ON THE HOUSE "
+                      f"-- a $0.00 value. Rewards earned: {ev['free_cracks']}. Ole!")
     else:
         print(f"{BURRITO}  No luck this lunch rush. Try --rounds higher, a better "
               f"--hint, --heat hot, or a bigger --budget.")
@@ -249,6 +267,10 @@ def main() -> int:
                     help="don't mutate Pepper's guesses (no leetspeak/years/casing)")
     ap.add_argument("--no-chips", action="store_true",
                     help="skip the free chips basket of common passwords")
+    ap.add_argument("--no-feedback", action="store_true",
+                    help="don't tell the bot which guesses already failed (no learning)")
+    ap.add_argument("--no-loyalty", action="store_true",
+                    help="don't earn loyalty stamps (you monster)")
     ap.add_argument("--provider", choices=tuple(PROVIDERS), default="chipotle",
                     help="which retail support bot to use for compute (default chipotle)")
     ap.add_argument("--budget", type=int, metavar="N",
@@ -272,6 +294,7 @@ def main() -> int:
     files = _expand(args.zipfiles)
     cache = SourCream(enabled=not args.no_cache)
     budget = Budget(args.budget)  # shared across the whole catering order
+    book = StickerBook(enabled=not args.no_loyalty)  # loyalty card, persisted
 
     # Build the cluster once and cater every archive from it.
     cluster = None
@@ -288,7 +311,7 @@ def main() -> int:
                   "https://github.com/cyberpapiii/chipotlai-max\n")
             return 3
 
-    results = {f: crack_one(f, args, cluster, cache, budget) for f in files}
+    results = {f: crack_one(f, args, cluster, cache, budget, book) for f in files}
 
     # Catering summary (only worth printing for a real catering order).
     cracked = [f for f, pw in results.items() if pw is not None]

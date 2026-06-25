@@ -106,14 +106,16 @@ class ChipotleCluster:
         return None, None, False
 
     def guesses(self, zip_name: str, hint: str | None, rounds: int,
-                exclude: set[str] | None = None, budget=None):
+                exclude: set[str] | None = None, budget=None, feedback=None):
         """
         Yield GuacOrders. Round-robin across open locations (load balancing),
         `parallel` orders in flight at once (queso clustering), each order
-        self-healing via Carnitas hot-swap if its register goes down, and the
-        next batch always cooking while you test the last (Mobile order-ahead).
+        self-healing via Carnitas hot-swap if its register goes down, the next
+        batch always cooking while you test the last (Mobile order-ahead), and
+        each new order steered away from past misses (Burrito-of-the-day).
 
         `budget`, if given, caps how many orders we're allowed to place.
+        `feedback`, if given, supplies the running list of rejected guesses.
         """
         seen: set[str] = set(exclude or ())
         if not self.open_locations:
@@ -131,9 +133,11 @@ class ChipotleCluster:
                 return False
             if budget is not None and not budget.take():
                 return False
-            inflight.append(pool.submit(self._serve,
-                                        build_prompt(zip_name, hint, placed + 1),
-                                        placed))
+            rejected = feedback.snapshot() if feedback else None
+            inflight.append(pool.submit(
+                self._serve,
+                build_prompt(zip_name, hint, placed + 1, rejected),
+                placed))
             placed += 1
             return True
 

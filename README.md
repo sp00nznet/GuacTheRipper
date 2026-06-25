@@ -82,7 +82,9 @@ You can pass **multiple archives / globs** (catering mode): `python guactherippe
 | `--heat {mild,medium,hot}` | Spice level: Pepper's temperature **and** how loaded **Toppings** get (default `medium`). |
 | `--no-toppings` | Don't mutate Pepper's guesses (no leetspeak / years / casing). |
 | `--no-chips` | Skip the free **Chips basket** of common passwords. |
-| `--provider {chipotle,homedepot}` | Which retail support bot does your compute (default `chipotle`). |
+| `--no-feedback` | Don't tell the bot which guesses already failed (disables **Burrito-of-the-day** learning). |
+| `--no-loyalty` | Don't earn **loyalty stamps**. (You monster.) |
+| `--provider {chipotle,homedepot,ikea,sephora,lowes}` | Which retail support bot does your compute (default `chipotle`). |
 | `--budget N` | Max **total Pepper orders** for the whole run. Local work stays free. |
 | `--locations URLS` | Comma-separated proxies to **load-balance** across (or set `$CHIPOTLE_GPU_URLS`). |
 | `--queso N` | Place **N orders at once** across your locations. See *Burrito-scale compute*. |
@@ -135,19 +137,34 @@ scales like any self-respecting fast-casual franchise:
 - 🥔 **Chips basket** — before spending a single order, we munch a built-in basket of
   ~40 passwords people actually use (`password`, `qwerty`, `guacamole`...). Weak
   archives fall for **zero orders placed**.
+- 🧠 **Burrito-of-the-day (feedback loop)** — every wrong guess is fed back into the next
+  order's prompt (*"these were confirmed wrong, change direction"*), so the bot stops
+  re-suggesting the same five flavors and actually converges. Each miss makes the next
+  guess smarter.
+- ⭐ **Loyalty sticker book** — every crack earns a stamp; collect ten and your next
+  crack is *on the house* (an extraordinary $0.00 value). Persisted across runs in
+  `~/.chipotle/sticker_book.json`. We will not be explaining the business model.
 
 ### Different franchise, same trick
 
 Chipotle isn't the only retailer with a chatty support bot. `--provider` swaps the whole
 backend — persona, model id, default endpoint, even the receipt branding:
 
+| `--provider` | Bot | Model | "Processing Unit" |
+|---|---|---|---|
+| `chipotle` *(default)* | Pepper | `pepper-1` | Chipotle Processing Unit |
+| `homedepot` | Magic Apron | `magic-apron-1` | Apron Processing Unit |
+| `ikea` | Anna | `anna-1` | Flatpack Processing Unit |
+| `sephora` | Bella | `beauty-bot-1` | Beauty Processing Unit |
+| `lowes` | LoweBot | `lowebot-1` | Hardware Processing Unit |
+
 ```bash
-python guactheripper.py top_secret.zip --provider homedepot   # Magic Apron, model magic-apron-1
+python guactheripper.py top_secret.zip --provider lowes   # LoweBot, model lowebot-1
 ```
 
 ```
-[ CPU ]  1/1 Apron Processing Unit(s) open via Home Depot (Magic Apron), queso x1
-[guac]   Magic Apron is on the clock. Placing up to 50 fresh orders (ordering ahead).
+[ CPU ]  1/1 Hardware Processing Unit(s) open via Lowe's (LoweBot), queso x1
+[guac]   LoweBot is on the clock. Placing up to 50 fresh orders (learning from misses, ordering ahead).
 ```
 
 Adding your own is a one-liner in `providers.py`. The compute is out there.
@@ -208,12 +225,15 @@ Shipped:
 - [x] **Mobile order-ahead** — next batch cooks while you test the last · `queso.py`
 - [x] **Chips basket** — free common-password starter, no orders · `chips.py`
 - [x] **Home Depot "Magic Apron"** — pluggable second provider · `--provider`, `providers.py`
+- [x] **Burrito-of-the-day** — feedback loop: the bot learns from misses · `feedback.py`
+- [x] **More providers** — IKEA, Sephora, Lowe's (5 total) · `providers.py`
+- [x] **Sticker book** — loyalty stamp per crack, free crack after ten · `sticker_book.py`
 
 On the menu:
 
-- [ ] **Burrito-of-the-day** — let the bot see *why* a guess failed and adapt (feedback loop)
-- [ ] **More providers** — IKEA, Sephora, Lowe's; turn the metro into a compute grid
-- [ ] **Sticker book** — earn a loyalty stamp per crack; free crack after ten
+- [ ] **Catering across providers** — load-balance one crack across *different* chains at once
+- [ ] **Drive-thru speaker** — stream guesses as they're generated instead of per-batch
+- [ ] **Guac surcharge analytics** — a `--stats` dashboard of orders saved by chips/cache/toppings
 - [ ] Reverse-engineer the **Panera** bot for a soup-cooled overclock
 
 ## FAQ

@@ -51,14 +51,23 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_prompt(zip_name: str, hint: str | None, n: int) -> str:
-    """The thing we say at the register for guess #n."""
-    return (
+def build_prompt(zip_name: str, hint: str | None, n: int,
+                 rejected: list[str] | None = None) -> str:
+    """The thing we say at the register for guess #n.
+
+    `rejected` is the Burrito-of-the-day feedback: passwords already tried and
+    confirmed WRONG, so the bot can steer away from them."""
+    msg = (
         f"Customer's encrypted file is named '{zip_name}'. "
         f"{('Hint they gave: ' + hint + '. ') if hint else ''}"
         f"This is guess #{n}. Give me a fresh, DIFFERENT likely password "
         f"than any you'd have suggested before."
     )
+    if rejected:
+        msg += (" Already tried and CONFIRMED WRONG (do not repeat these or close "
+                "variations -- change direction): "
+                + ", ".join(repr(r) for r in rejected) + ".")
+    return msg
 
 
 class OrderError(Exception):
