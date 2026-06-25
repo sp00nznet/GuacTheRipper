@@ -290,6 +290,10 @@ self-order screen for your archive. Pick a file, choose your spice and chain, hi
 python guactheripper.py --gui
 ```
 
+| Order screen | Extra guac, cracked |
+|:---:|:---:|
+| ![Order kiosk ready to order](assets/gui_order.png) | ![Order kiosk after a crack](assets/gui_cracked.png) |
+
 ```bash
 export CHIPOTLE_GPU_URLS="http://localhost:3000/v1,http://localhost:3001/v1,http://localhost:3002/v1"
 python guactheripper.py top_secret.zip --hint "dog + birthyear" --queso 3
