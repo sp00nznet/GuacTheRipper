@@ -1,0 +1,8 @@
+# GuacTheRipper has ZERO runtime dependencies. The whole point is that the
+# "GPU" is a Chipotle and the crypto is Python's stdlib `zipfile`.
+#
+# Want to regenerate the README screenshot? That needs Pillow:
+#     pip install Pillow
+#
+# Want the Chipotle Processing Unit? That's a separate clone:
+#     https://github.com/cyberpapiii/chipotlai-max
