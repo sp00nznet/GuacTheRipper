@@ -1,0 +1,16 @@
+{
+  "defaults": {
+    "heat": "hot",
+    "rounds": 100,
+    "provider": "chipotle",
+    "combo": 3,
+    "receipt": true,
+    "stats": true
+  },
+  "archives": [
+    { "path": "q3_backups.zip", "hint": "project codename + year" },
+    { "path": "vacation_photos.zip", "hint": "dog's name", "heat": "medium" },
+    { "path": "old_taxes.zip", "hint": "SSN last 4 + birth year", "rounds": 250 },
+    "misc_junk.zip"
+  ]
+}

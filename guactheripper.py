@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import glob
 import sys
 import time
@@ -32,10 +33,12 @@ import zipfile
 
 from budget import Budget
 from chips import BASKET
+from contract import load_contract, DEFAULT_KEYS, ARCHIVE_KEYS
 from feedback import Feedback
 from providers import PROVIDERS
 from queso import ChipotleCluster
 from receipts import write_receipt
+from salsa import load_salsa
 from sour_cream import SourCream
 from stats import Stats
 from sticker_book import StickerBook
@@ -94,13 +97,13 @@ def doordash_mode(path: str, wordlist: str, gpu_offline: bool,
     return None
 
 
-def _crack_with(path: str, base: str, heat: str,
-                use_toppings: bool) -> tuple[str | None, int]:
-    """Test a base guess and (optionally) its Toppings.
+def _crack_with(path: str, base: str, heat: str, use_toppings: bool,
+                salsa=None) -> tuple[str | None, int]:
+    """Test a base guess and (optionally) its Toppings + salsa-bar rules.
 
     Returns (winner_or_None, candidates_tested)."""
     tested = 0
-    for cand in (toppings(base, heat) if use_toppings else [base]):
+    for cand in (toppings(base, heat, salsa) if use_toppings else [base]):
         tested += 1
         if _can_open(path, cand):
             return cand, tested
@@ -118,7 +121,8 @@ def _show(n: int, base: str, label: str, source: str, note: str = "",
 def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
                   hint: str | None, rounds: int, heat: str, use_toppings: bool,
                   use_chips: bool, budget: Budget, use_feedback: bool,
-                  combo: int, stats: Stats) -> tuple[str | None, int, str]:
+                  combo: int, stats: Stats,
+                  salsa=None) -> tuple[str | None, int, str]:
     """The main event: chips, then the fridge, then bot guesses + Toppings.
 
     Returns (password_or_None, orders_placed, serving_location)."""
@@ -130,7 +134,7 @@ def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
     feedback = Feedback(enabled=use_feedback)  # Burrito-of-the-day learning board
 
     def attempt(base, heat_):
-        win, tested = _crack_with(path, base, heat_, use_toppings)
+        win, tested = _crack_with(path, base, heat_, use_toppings, salsa)
         stats.local(tested)
         return win
 
@@ -143,9 +147,11 @@ def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
         stats.crack("cache")
         return remembered, 0, "the fridge"
 
+    salsa_bit = (f"  |  salsa: {salsa.describe()}"
+                 if (salsa is not None and not salsa.empty()) else "")
     print(f"{PEPPER}  {cluster.status()}  |  heat: {heat}  |  "
           f"toppings: {'on' if use_toppings else 'off'}"
-          f"{('  |  combo x' + str(combo)) if combo > 1 else ''}")
+          f"{('  |  combo x' + str(combo)) if combo > 1 else ''}{salsa_bit}")
 
     # 2. Chips basket: free common passwords, tried locally before any order.
     if use_chips:
@@ -229,7 +235,7 @@ def _expand(patterns: list[str]) -> list[str]:
 
 
 def crack_one(path: str, args, cluster, cache, budget: Budget,
-              book: StickerBook, stats: Stats) -> str | None:
+              book: StickerBook, stats: Stats, salsa=None) -> str | None:
     """Crack a single archive. Returns the password, or None."""
     print(f"\n{'=' * 64}\n  {path}\n{'=' * 64}")
     brand = cluster.provider.label if cluster else "the neighborhood"
@@ -251,7 +257,7 @@ def crack_one(path: str, args, cluster, cache, budget: Budget,
         found, orders, served = chipotle_mode(
             path, cluster, cache, args.hint, args.rounds, args.heat,
             not args.no_toppings, not args.no_chips, budget,
-            not args.no_feedback, args.combo, stats)
+            not args.no_feedback, args.combo, stats, salsa)
         cache.save()
 
     print()
@@ -283,8 +289,17 @@ def crack_one(path: str, args, cluster, cache, budget: Budget,
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Crack ZIP passwords using a Chipotle instead of a GPU.")
-    ap.add_argument("zipfiles", nargs="+", metavar="ZIP",
+    ap.add_argument("zipfiles", nargs="*", metavar="ZIP",
                     help="the encrypted .zip(s) you (definitely) own; globs OK")
+    ap.add_argument("--gui", action="store_true",
+                    help="launch the desktop order kiosk (a small Tkinter GUI)")
+    ap.add_argument("--map", action="store_true", dest="franchise_map",
+                    help="print the franchise map (which provider proxies are up) and exit")
+    ap.add_argument("--contract", metavar="JOB.json",
+                    help="run a catering contract: a JSON file describing the whole job")
+    ap.add_argument("--salsa", metavar="RULES",
+                    help="salsa bar: a file of custom Toppings rules "
+                         "(else ~/.chipotle/salsa.txt if present)")
     ap.add_argument("--hint", help="a hint to whisper to Pepper at the register")
     ap.add_argument("--rounds", type=int, default=50,
                     help="how many burritos to order before giving up (default 50)")
@@ -326,22 +341,57 @@ def main() -> int:
                     help="skip the bot, use a local wordlist (cold, sad, offline)")
     args = ap.parse_args()
 
+    # --- early exits that don't crack anything --------------------------------
+    if args.gui:
+        import gui
+        return gui.launch()
+
+    if args.franchise_map:
+        import franchise
+        print(franchise.render(franchise.scan()))
+        return 0
+
     if args.combo < 1:
         ap.error("--combo must be at least 1")
 
+    # --- assemble the job list (CLI files or a catering contract) -------------
+    file_jobs: list[tuple[str, dict]] = []  # (path, per-archive overrides)
+    if args.contract:
+        try:
+            defaults, archives = load_contract(args.contract)
+        except ValueError as e:
+            ap.error(str(e))
+        for jkey, attr in DEFAULT_KEYS.items():
+            if jkey in defaults:
+                setattr(args, attr, defaults[jkey])
+        file_jobs = [(a["path"], a) for a in archives]
+    else:
+        file_jobs = [(f, {}) for f in _expand(args.zipfiles)]
+
+    if not file_jobs:
+        ap.error("nothing to crack: pass a ZIP (or a glob), or use --contract/--gui")
+
     banner()
-    files = _expand(args.zipfiles)
+    salsa = load_salsa(args.salsa)
     cache = SourCream(enabled=not args.no_cache)
     budget = Budget(args.budget)  # shared across the whole catering order
     book = StickerBook(enabled=not args.no_loyalty)  # loyalty card, persisted
     stats = Stats()
 
-    # Build the cluster once and cater every archive from it.
+    # --- build the cluster once and cater every archive from it ---------------
     cluster = None
     if not args.doordash:
         kw = {"explicit_urls": args.locations, "parallel": args.queso,
               "temperature": HEAT_TEMP[args.heat]}
-        if args.providers:
+        if args.providers and args.providers.strip() == "all":
+            import franchise
+            chains = franchise.open_providers()
+            if not chains:
+                print(f"{FIRE}  The whole metro is closed -- no provider proxies are up.")
+                print(franchise.render(franchise.scan()))
+                return 3
+            cluster = ChipotleCluster(providers=chains, **kw)
+        elif args.providers:
             try:
                 chains = [PROVIDERS[p.strip()] for p in args.providers.split(",")
                           if p.strip()]
@@ -359,18 +409,23 @@ def main() -> int:
                   "https://github.com/cyberpapiii/chipotlai-max\n")
             return 3
 
-    results = {f: crack_one(f, args, cluster, cache, budget, book, stats)
-               for f in files}
+    results: dict[str, str | None] = {}
+    for path, overrides in file_jobs:
+        per = copy.copy(args)  # per-archive overrides (hint/heat/rounds/combo)
+        for k in ARCHIVE_KEYS:
+            if k in overrides:
+                setattr(per, k, overrides[k])
+        results[path] = crack_one(path, per, cluster, cache, budget, book, stats, salsa)
 
     # Catering summary (only worth printing for a real catering order).
     cracked = [f for f, pw in results.items() if pw is not None]
-    if len(files) > 1:
-        print(f"\n{GUAC}  Catering summary: {len(cracked)}/{len(files)} archives cracked.")
-        for f in files:
-            pw = results[f]
+    if len(file_jobs) > 1:
+        print(f"\n{GUAC}  Catering summary: {len(cracked)}/{len(file_jobs)} archives cracked.")
+        for path, _ in file_jobs:
+            pw = results[path]
             mark = "OK " if pw is not None else "-- "
             shown = repr(pw) if pw else ("(not encrypted)" if pw == "" else "(no luck)")
-            print(f"   [{mark}] {f}  {shown}")
+            print(f"   [{mark}] {path}  {shown}")
 
     if args.stats:
         print(stats.render(orders=stats.orders, rounds=args.rounds))

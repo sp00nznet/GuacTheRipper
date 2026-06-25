@@ -75,6 +75,9 @@ python guactheripper.py top_secret.zip --hint "my dog's name + birth year"
 
 You can pass **multiple archives / globs** (catering mode): `python guactheripper.py *.zip`.
 
+**Modes:** `--gui` (desktop order kiosk) · `--map` (which proxies are up) ·
+`--contract job.json` (run a JSON job) · `--salsa rules.txt` (custom Toppings rules).
+
 | Flag | What it does |
 |------|--------------|
 | `--hint "..."` | Whisper a hint to Pepper at the register. Dramatically better guesses. |
@@ -88,6 +91,10 @@ You can pass **multiple archives / globs** (catering mode): `python guactherippe
 | `--providers LIST` | **Cross-provider catering**: load-balance one crack across several chains at once (e.g. `chipotle,homedepot,ikea`). |
 | `--combo N` | **Drive-thru speaker**: ask each order for N candidates at once. More guesses per order = fewer orders. |
 | `--stats` | Print a **Guac Surcharge Analytics** dashboard at the end. |
+| `--salsa RULES` | **Salsa bar**: load custom Toppings rules from a file. |
+| `--gui` | Launch the **desktop order kiosk** (a small Tkinter GUI). |
+| `--map` | Print the **franchise map** (which provider proxies are up) and exit. |
+| `--contract JOB.json` | Run a **catering contract** — a JSON job file (see `examples/catering.json`). |
 | `--budget N` | Max **total Pepper orders** for the whole run. Local work stays free. |
 | `--locations URLS` | Comma-separated proxies to **load-balance** across (or set `$CHIPOTLE_GPU_URLS`). |
 | `--queso N` | Place **N orders at once** across your locations. See *Burrito-scale compute*. |
@@ -219,6 +226,70 @@ End any run with `--stats` for a dashboard of what the franchise saved you:
   +==================================+
 ```
 
+### Salsa bar (bring your own rules)
+
+Toppings ships a fixed rule set. The **salsa bar** lets you add your own in a plain
+text file — no code — and load it with `--salsa rules.txt` (or drop it at
+`~/.chipotle/salsa.txt` to auto-load):
+
+```
+# salsa.txt
+suffix 2027        # also try every guess ending in 2027
+prefix !           # ...and every guess starting with !
+sub a @            # your own leetspeak substitution
+99redballoons      # a bare line is just an extra suffix
+```
+
+### Franchise map
+
+Check who's open before you dial:
+
+```bash
+python guactheripper.py --map
+```
+
+```
+  +======== FRANCHISE MAP ========+
+  [OPEN  ] Chipotle    Pepper       http://localhost:3000/v1
+  [closed] Home Depot  Magic Apron  http://localhost:3100/v1
+  --> 1/5 locations open for orders.
+  +===============================+
+```
+
+…and `--providers all` uses exactly this to dial only the chains that are up.
+
+### Catering contracts
+
+For big jobs, skip the giant command line and write a JSON contract once
+(see [`examples/catering.json`](examples/catering.json)):
+
+```json
+{
+  "defaults": { "heat": "hot", "rounds": 100, "combo": 3, "stats": true },
+  "archives": [
+    { "path": "q3_backups.zip", "hint": "project codename + year" },
+    { "path": "photos.zip", "hint": "dog name", "heat": "medium" }
+  ]
+}
+```
+
+```bash
+python guactheripper.py --contract catering.json
+```
+
+`defaults` configure the whole run; each archive may override `hint`, `heat`,
+`rounds`, or `combo`.
+
+### Desktop order kiosk (`--gui`)
+
+Prefer buttons to flags? There's a small, pure-stdlib Tkinter front-end — a
+self-order screen for your archive. Pick a file, choose your spice and chain, hit
+**PLACE ORDER**, and the register output streams into the receipt window:
+
+```bash
+python guactheripper.py --gui
+```
+
 ```bash
 export CHIPOTLE_GPU_URLS="http://localhost:3000/v1,http://localhost:3001/v1,http://localhost:3002/v1"
 python guactheripper.py top_secret.zip --hint "dog + birthyear" --queso 3
@@ -281,12 +352,15 @@ Shipped:
 - [x] **Cross-provider catering** — one crack load-balanced across chains · `--providers`
 - [x] **Drive-thru speaker** — N candidates per order (combo meals) · `--combo`
 - [x] **Guac surcharge analytics** — savings dashboard · `--stats`, `stats.py`
+- [x] **Salsa bar** — user-defined Toppings rules, no code · `--salsa`, `salsa.py`
+- [x] **Franchise map** — probe which proxies are up; `--providers all` · `franchise.py`
+- [x] **Catering contract** — JSON job file for big runs · `--contract`, `contract.py`
+- [x] **Desktop order kiosk** — optional Tkinter GUI · `--gui`, `gui.py`
 
 On the menu:
 
-- [ ] **Salsa bar** — let users register custom Toppings rules without touching code
-- [ ] **Franchise map** — auto-discover which provider proxies are actually up before dialing
-- [ ] **Catering contract** — a JSON job file describing a big multi-archive run
+- [ ] **Self-checkout** — package the GUI as a standalone `.exe` with PyInstaller
+- [ ] **Drive-thru headset** — pipe live progress to a webhook / Discord
 - [ ] Reverse-engineer the **Panera** bot for a soup-cooled overclock
 
 ## FAQ

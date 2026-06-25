@@ -33,8 +33,11 @@ SUFFIXES = {
 CAP = {"mild": 12, "medium": 48, "hot": 160}
 
 
-def toppings(base: str, heat: str = "medium"):
-    """Yield local variants of `base`, base itself first, deduped, capped."""
+def toppings(base: str, heat: str = "medium", salsa=None):
+    """Yield local variants of `base`, base itself first, deduped, capped.
+
+    `salsa`, if given, contributes user-defined extra prefixes/suffixes/subs
+    from the salsa bar (see salsa.py)."""
     heat = heat if heat in SUFFIXES else "medium"
 
     case_order = [base, base.capitalize(), base.lower(), base.upper()]
@@ -44,8 +47,20 @@ def toppings(base: str, heat: str = "medium"):
         case_order.append(base.capitalize().translate(LEET))
         case_order.append(base.upper().translate(LEET))
 
-    sfx = SUFFIXES[heat]
+    sfx = list(SUFFIXES[heat])
     cap = CAP[heat]
+
+    if salsa is not None and not salsa.empty():
+        if salsa.subs:
+            table = str.maketrans(salsa.subs)
+            case_order.append(base.translate(table))
+            case_order.append(base.capitalize().translate(table))
+        for p in salsa.prefixes:
+            case_order.append(p + base)
+            case_order.append(p + base.capitalize())
+        sfx.extend(salsa.suffixes)
+        # Make sure there's room for everything the salsa bar adds.
+        cap = max(cap, len(case_order) * len(sfx))
 
     out: list[str] = []
     seen: set[str] = set()
