@@ -86,6 +86,9 @@ class GuacOrder:
     source: str            # "chipotle" or "sour-cream" (cache)
     location: str = ""     # which Chipotle served it
     note: str = ""         # e.g. "failover -> @loc3"
+    combo_index: int = 1   # which item of a combo meal this is (1-based)
+    combo_size: int = 1    # how many candidates that one order returned
+    order_lead: bool = True  # True for the first candidate yielded per order
 
 
 def _label_for(url: str) -> str:
@@ -123,12 +126,12 @@ class ChipotleGPU:
         except (urllib.error.URLError, OSError):
             return False
 
-    def order(self, prompt: str) -> str | None:
-        """Place one order at this Chipotle Processing Unit. Returns Pepper's guess.
+    def _complete(self, prompt: str, max_tokens: int) -> str | None:
+        """One round trip to the bot. Returns raw content, or None if no answer.
 
-        Returns None if Pepper genuinely has no guess (PASS / empty / garbled
-        body). Raises OrderError if the register itself is unreachable -- that's
-        the signal the cluster uses to fail over (Carnitas hot-swap).
+        Raises OrderError if the register is unreachable -- the signal the
+        cluster uses to fail over (Carnitas hot-swap). A busy grill (429/503/502)
+        gets a polite, exponentially-backed-off re-order rather than a stampede.
         """
         payload = json.dumps({
             "model": self.model,
@@ -137,7 +140,7 @@ class ChipotleGPU:
                 {"role": "user", "content": prompt},
             ],
             "temperature": self.temperature,
-            "max_tokens": 32,
+            "max_tokens": max_tokens,
         }).encode()
 
         req = urllib.request.Request(
@@ -149,9 +152,6 @@ class ChipotleGPU:
             },
         )
 
-        # Burrito budget / backoff: a busy grill (429/503/502) gets a polite,
-        # exponentially-backed-off re-order rather than a stampede. A register
-        # that's actually down raises OrderError so the cluster can fail over.
         body = None
         for attempt in range(self.retries + 1):
             try:
@@ -170,10 +170,45 @@ class ChipotleGPU:
             raise OrderError(f"{self.label}: rate-limited after {self.retries} re-orders")
 
         try:
-            guess = body["choices"][0]["message"]["content"].strip()
+            return body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):
             return None
+
+    @staticmethod
+    def _clean(line: str) -> str:
+        return line.strip().strip('"').strip("'").strip()
+
+    def order(self, prompt: str) -> str | None:
+        """Place one order. Returns the single most likely password (or None)."""
+        content = self._complete(prompt, max_tokens=32)
+        if content is None:
+            return None
+        guess = content.strip()
         if guess.upper() == "PASS" or not guess:
             return None
         # Pepper sometimes wraps the answer in a friendly burrito of words.
-        return guess.splitlines()[0].strip().strip('"').strip("'")
+        return self._clean(guess.splitlines()[0])
+
+    def order_combo(self, prompt: str, k: int) -> list[str]:
+        """Drive-thru speaker: ask for a COMBO of up to k candidates in one order.
+
+        One round trip, several guesses -- the bot lists them one per line and we
+        surface each as it comes off the speaker."""
+        combo_prompt = (
+            f"{prompt} Actually, give me your top {k} DISTINCT candidate "
+            f"passwords, most likely first, ONE PER LINE, nothing else."
+        )
+        content = self._complete(combo_prompt, max_tokens=16 * k + 16)
+        if content is None:
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for line in content.splitlines():
+            cand = self._clean(line.lstrip("0123456789.)-").strip())
+            if not cand or cand.upper() == "PASS" or cand in seen:
+                continue
+            seen.add(cand)
+            out.append(cand)
+            if len(out) >= k:
+                break
+        return out

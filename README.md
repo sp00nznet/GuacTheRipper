@@ -85,6 +85,9 @@ You can pass **multiple archives / globs** (catering mode): `python guactherippe
 | `--no-feedback` | Don't tell the bot which guesses already failed (disables **Burrito-of-the-day** learning). |
 | `--no-loyalty` | Don't earn **loyalty stamps**. (You monster.) |
 | `--provider {chipotle,homedepot,ikea,sephora,lowes}` | Which retail support bot does your compute (default `chipotle`). |
+| `--providers LIST` | **Cross-provider catering**: load-balance one crack across several chains at once (e.g. `chipotle,homedepot,ikea`). |
+| `--combo N` | **Drive-thru speaker**: ask each order for N candidates at once. More guesses per order = fewer orders. |
+| `--stats` | Print a **Guac Surcharge Analytics** dashboard at the end. |
 | `--budget N` | Max **total Pepper orders** for the whole run. Local work stays free. |
 | `--locations URLS` | Comma-separated proxies to **load-balance** across (or set `$CHIPOTLE_GPU_URLS`). |
 | `--queso N` | Place **N orders at once** across your locations. See *Burrito-scale compute*. |
@@ -169,6 +172,53 @@ python guactheripper.py top_secret.zip --provider lowes   # LoweBot, model loweb
 
 Adding your own is a one-liner in `providers.py`. The compute is out there.
 
+**Cross-provider catering.** Why pick one chain? `--providers` load-balances a single
+crack across *several* at once — the whole metro working your password in parallel:
+
+```bash
+python guactheripper.py top_secret.zip --providers chipotle,homedepot,ikea
+```
+
+```
+[ CPU ]  3/3 Processing Unit(s) open across Chipotle, Home Depot, IKEA, queso x3
+[guac]   the whole metro is on the clock. Placing up to 50 fresh orders (ordering ahead).
+```
+
+### Drive-thru speaker (combo orders)
+
+One order, one guess is wasteful. `--combo N` asks the bot for **N candidates per order**
+and surfaces them as they come off the speaker — so a single order (one unit of burrito
+budget) becomes several guesses:
+
+```bash
+python guactheripper.py top_secret.zip --combo 5
+```
+
+```
+  [#.................] order #1   chipotle  @loc1   (1/5) 'spring2024'
+  [##................] order #1   chipotle  @loc1   (2/5) 'Spring2024!'
+  [###...............] order #1   chipotle  @loc1   (3/5) 'springfield'
+  ...
+```
+
+### Guac Surcharge Analytics (`--stats`)
+
+End any run with `--stats` for a dashboard of what the franchise saved you:
+
+```
+  +==== GUAC SURCHARGE ANALYTICS ====+
+  Archives processed     : 2
+  Cracked                : 2
+  Pepper orders placed   : 1   (real burritos bought)
+  Local candidates tried : 2,003   (free, on your machine)
+  Cracks by source:
+     chips basket    : 1
+     toppings        : 1
+  Orders you DIDN'T place : ~21   (chips/cache cracks x rounds, + toppings rescues)
+  GPU cost avoided        : $1,800.00. You're welcome.
+  +==================================+
+```
+
 ```bash
 export CHIPOTLE_GPU_URLS="http://localhost:3000/v1,http://localhost:3001/v1,http://localhost:3002/v1"
 python guactheripper.py top_secret.zip --hint "dog + birthyear" --queso 3
@@ -228,12 +278,15 @@ Shipped:
 - [x] **Burrito-of-the-day** — feedback loop: the bot learns from misses · `feedback.py`
 - [x] **More providers** — IKEA, Sephora, Lowe's (5 total) · `providers.py`
 - [x] **Sticker book** — loyalty stamp per crack, free crack after ten · `sticker_book.py`
+- [x] **Cross-provider catering** — one crack load-balanced across chains · `--providers`
+- [x] **Drive-thru speaker** — N candidates per order (combo meals) · `--combo`
+- [x] **Guac surcharge analytics** — savings dashboard · `--stats`, `stats.py`
 
 On the menu:
 
-- [ ] **Catering across providers** — load-balance one crack across *different* chains at once
-- [ ] **Drive-thru speaker** — stream guesses as they're generated instead of per-batch
-- [ ] **Guac surcharge analytics** — a `--stats` dashboard of orders saved by chips/cache/toppings
+- [ ] **Salsa bar** — let users register custom Toppings rules without touching code
+- [ ] **Franchise map** — auto-discover which provider proxies are actually up before dialing
+- [ ] **Catering contract** — a JSON job file describing a big multi-archive run
 - [ ] Reverse-engineer the **Panera** bot for a soup-cooled overclock
 
 ## FAQ

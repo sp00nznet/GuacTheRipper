@@ -46,20 +46,31 @@ class ChipotleCluster:
 
     def __init__(self, urls: list[str] | None = None, parallel: int | None = None,
                  explicit_urls: str | None = None, temperature: float = 0.9,
-                 provider=None):
-        from providers import CHIPOTLE
-        self.provider = provider or CHIPOTLE
+                 provider=None, providers=None):
+        from providers import CHIPOTLE, METRO
 
-        url_list = (urls if urls is not None
-                    else _urls_from_env(explicit_urls, self.provider.url))
+        self.locations = []
+        if providers:
+            # Cross-provider catering: one location per chain, each at its own
+            # default endpoint with its own persona/model/key. Branded "the metro"
+            # when more than one chain is in the mix.
+            self.provider = providers[0] if len(providers) == 1 else METRO
+            for p in providers:
+                loc = ChipotleGPU(url=p.url, label=f"@{p.key}", temperature=temperature,
+                                  model=p.model, key=p.api_key, system_prompt=p.persona)
+                loc.provider = p
+                self.locations.append(loc)
+        else:
+            self.provider = provider or CHIPOTLE
+            url_list = (urls if urls is not None
+                        else _urls_from_env(explicit_urls, self.provider.url))
+            for i, u in enumerate(url_list):
+                loc = ChipotleGPU(url=u, label=f"@loc{i + 1}", temperature=temperature,
+                                  model=self.provider.model, key=self.provider.api_key,
+                                  system_prompt=self.provider.persona)
+                loc.provider = self.provider
+                self.locations.append(loc)
 
-        # Each location names itself @loc1, @loc2, ... for friendly output.
-        self.locations = [
-            ChipotleGPU(url=u, label=f"@loc{i + 1}", temperature=temperature,
-                        model=self.provider.model, key=self.provider.api_key,
-                        system_prompt=self.provider.persona)
-            for i, u in enumerate(url_list)
-        ]
         self.open_locations = [loc for loc in self.locations if loc.online]
         self._lock = threading.Lock()  # guards Carnitas hot-swap bookkeeping
 
@@ -75,19 +86,24 @@ class ChipotleCluster:
         total = len(self.locations)
         up = len(self.open_locations)
         closed = total - up
-        bit = (f"{up}/{total} {self.provider.unit}(s) open via "
-               f"{self.provider.label} ({self.provider.bot})")
+        chains = sorted({loc.provider.label for loc in self.locations})
+        if len(chains) > 1:
+            bit = f"{up}/{total} Processing Unit(s) open across {', '.join(chains)}"
+        else:
+            bit = (f"{up}/{total} {self.provider.unit}(s) open via "
+                   f"{self.provider.label} ({self.provider.bot})")
         if closed:
             bit += f" ({closed} closed for remodeling)"
         return f"{bit}, queso x{min(self.parallel, max(1, up))}"
 
-    def _serve(self, prompt: str, start: int):
+    def _serve(self, prompt: str, start: int, combo: int):
         """Take one order, with Carnitas hot-swap: if the assigned register is
-        down, fail over to the next open one. Returns (guess, location, swapped)."""
+        down, fail over to the next open one. Returns (candidates, location,
+        swapped) -- a list because a combo order can return several guesses."""
         with self._lock:
             locs = list(self.open_locations)
         if not locs:
-            return None, None, False
+            return [], None, False
 
         n = len(locs)
         for k in range(n):
@@ -95,18 +111,24 @@ class ChipotleCluster:
             if not loc.online:
                 continue
             try:
-                return loc.order(prompt), loc, (k > 0)
+                if combo > 1:
+                    cands = loc.order_combo(prompt, combo)
+                else:
+                    g = loc.order(prompt)
+                    cands = [g] if g else []
+                return cands, loc, (k > 0)
             except OrderError:
                 # Register closed mid-shift. Mark it down so nobody else queues
-                # there, then walk to the next open Chipotle.
+                # there, then walk to the next open location.
                 with self._lock:
                     loc.online = False
                     if loc in self.open_locations:
                         self.open_locations.remove(loc)
-        return None, None, False
+        return [], None, False
 
     def guesses(self, zip_name: str, hint: str | None, rounds: int,
-                exclude: set[str] | None = None, budget=None, feedback=None):
+                exclude: set[str] | None = None, budget=None, feedback=None,
+                combo: int = 1):
         """
         Yield GuacOrders. Round-robin across open locations (load balancing),
         `parallel` orders in flight at once (queso clustering), each order
@@ -137,7 +159,7 @@ class ChipotleCluster:
             inflight.append(pool.submit(
                 self._serve,
                 build_prompt(zip_name, hint, placed + 1, rejected),
-                placed))
+                placed, combo))
             placed += 1
             return True
 
@@ -148,13 +170,21 @@ class ChipotleCluster:
             while inflight:
                 fut = inflight.popleft()
                 order_ahead()  # refill BEFORE we hand back a result = order-ahead
-                candidate, loc, swapped = fut.result()
-                if candidate and loc and candidate not in seen:
+                candidates, loc, swapped = fut.result()
+                if not loc:
+                    continue
+                lead = True  # first fresh candidate of this order
+                for candidate in candidates:
+                    if not candidate or candidate in seen:
+                        continue
                     seen.add(candidate)
                     yield GuacOrder(
                         candidate=candidate, source="chipotle",
                         location=loc.label,
-                        note=("carnitas hot-swap" if swapped else ""))
+                        note=("carnitas hot-swap" if (swapped and lead) else ""),
+                        combo_index=candidates.index(candidate) + 1,
+                        combo_size=len(candidates), order_lead=lead)
+                    lead = False
         finally:
             # Consumer cracked it (or bailed) -> stop ordering ahead immediately.
             pool.shutdown(wait=False, cancel_futures=True)

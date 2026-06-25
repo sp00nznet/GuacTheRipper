@@ -120,3 +120,17 @@ LOWES = Provider(
 )
 
 PROVIDERS = {p.key: p for p in (CHIPOTLE, HOMEDEPOT, IKEA, SEPHORA, LOWES)}
+
+# Used only for branding when one crack is load-balanced across several chains
+# at once (cross-provider catering). Not selectable on its own.
+METRO = Provider(
+    key="metro",
+    label="the metro",
+    bot="the whole metro",
+    unit="Metro Processing Unit",
+    url="",
+    model="",
+    api_key="",
+    persona="",  # each real location keeps its own provider's persona
+    receipt_title="GUACTHERIPPER METRO",
+)
