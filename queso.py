@@ -25,9 +25,10 @@ A cluster of one location is still a perfectly valid (if lonely) cluster.
 from __future__ import annotations
 
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from chipotle_gpu import ChipotleGPU, GuacOrder, build_prompt
+from chipotle_gpu import ChipotleGPU, GuacOrder, OrderError, build_prompt
 
 
 def _urls_from_env(explicit: str | None = None) -> list[str]:
@@ -43,10 +44,10 @@ class ChipotleCluster:
 
     def __init__(self, urls: list[str] | None = None, model: str | None = None,
                  key: str | None = None, parallel: int | None = None,
-                 explicit_urls: str | None = None):
+                 explicit_urls: str | None = None, temperature: float = 0.9):
         url_list = urls if urls is not None else _urls_from_env(explicit_urls)
 
-        kw = {}
+        kw = {"temperature": temperature}
         if model is not None:
             kw["model"] = model
         if key is not None:
@@ -57,6 +58,7 @@ class ChipotleCluster:
             for i, u in enumerate(url_list)
         ]
         self.open_locations = [loc for loc in self.locations if loc.online]
+        self._lock = threading.Lock()  # guards Carnitas hot-swap bookkeeping
 
         # Default queso = work every open register at once, but never melt past
         # what's actually open. One register if a lonely cluster.
@@ -75,32 +77,55 @@ class ChipotleCluster:
             bit += f" ({closed} closed for remodeling)"
         return f"{bit}, queso x{min(self.parallel, max(1, up))}"
 
+    def _serve(self, prompt: str, start: int):
+        """Take one order, with Carnitas hot-swap: if the assigned register is
+        down, fail over to the next open one. Returns (guess, location, swapped)."""
+        with self._lock:
+            locs = list(self.open_locations)
+        if not locs:
+            return None, None, False
+
+        n = len(locs)
+        for k in range(n):
+            loc = locs[(start + k) % n]
+            if not loc.online:
+                continue
+            try:
+                return loc.order(prompt), loc, (k > 0)
+            except OrderError:
+                # Register closed mid-shift. Mark it down so nobody else queues
+                # there, then walk to the next open Chipotle.
+                with self._lock:
+                    loc.online = False
+                    if loc in self.open_locations:
+                        self.open_locations.remove(loc)
+        return None, None, False
+
     def guesses(self, zip_name: str, hint: str | None, rounds: int,
                 exclude: set[str] | None = None):
         """
         Yield GuacOrders. Round-robin across open locations (load balancing),
-        `parallel` orders in flight at once (queso clustering).
+        `parallel` orders in flight at once (queso clustering), each order
+        self-healing via Carnitas hot-swap if its register goes down.
         """
         seen: set[str] = set(exclude or ())
-        locs = self.open_locations
-        if not locs:
+        if not self.open_locations:
             return
 
-        width = min(self.parallel, len(locs)) or 1
-        idx = 0
+        width = min(self.parallel, len(self.open_locations)) or 1
         placed = 0
         with ThreadPoolExecutor(max_workers=width) as pool:
-            while placed < rounds:
-                batch = []
+            while placed < rounds and self.open_locations:
+                futs = []
                 for _ in range(min(width, rounds - placed)):
-                    loc = locs[idx % len(locs)]
-                    idx += 1
+                    prompt = build_prompt(zip_name, hint, placed + 1)
+                    futs.append(pool.submit(self._serve, prompt, placed))
                     placed += 1
-                    fut = pool.submit(loc.order, build_prompt(zip_name, hint, placed))
-                    batch.append((loc, fut))
-                for loc, fut in batch:
-                    candidate = fut.result()
-                    if candidate and candidate not in seen:
+                for fut in futs:
+                    candidate, loc, swapped = fut.result()
+                    if candidate and loc and candidate not in seen:
                         seen.add(candidate)
-                        yield GuacOrder(candidate=candidate,
-                                        source="chipotle", location=loc.label)
+                        yield GuacOrder(
+                            candidate=candidate, source="chipotle",
+                            location=loc.label,
+                            note=("carnitas hot-swap" if swapped else ""))

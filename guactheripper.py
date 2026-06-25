@@ -25,12 +25,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import glob
 import sys
 import time
 import zipfile
 
 from queso import ChipotleCluster
+from receipts import write_receipt
 from sour_cream import SourCream
+from toppings import toppings
+
+# --heat maps to how spicy Pepper runs (temperature) and how loaded the bowl gets.
+HEAT_TEMP = {"mild": 0.4, "medium": 0.9, "hot": 1.3}
 
 # ASCII tokens instead of emoji so output renders on every console, including
 # Windows cp1252 terminals that treat a burrito glyph as a capital offense.
@@ -78,17 +84,27 @@ def doordash_mode(path: str, wordlist: str, gpu_offline: bool) -> str | None:
     return None
 
 
-def _attempt(path: str, candidate: str, n: int, label: str, source: str) -> bool:
-    """Show one order on the board and test it. Returns True on a crack."""
+def _crack_with(path: str, base: str, heat: str, use_toppings: bool) -> str | None:
+    """Test a base guess and (optionally) its Toppings. Returns the winner."""
+    for cand in (toppings(base, heat) if use_toppings else [base]):
+        if _can_open(path, cand):
+            return cand
+    return None
+
+
+def _show(n: int, base: str, label: str, source: str, note: str = "") -> None:
+    """Print one order on the board."""
     bar = (BURRITO * min(n, 18)).ljust(18, ".")
-    tag = f"{source:<11}"
-    print(f"  [{bar}] order #{n:<3} {tag}{label:<8} {candidate!r}")
-    return _can_open(path, candidate)
+    extra = f"  <{note}>" if note else ""
+    print(f"  [{bar}] order #{n:<3} {source:<11}{label:<8} {base!r}{extra}")
 
 
 def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
-                  hint: str | None, rounds: int) -> str | None:
-    """The main event: Pepper guesses, we verify. Compute, but make it Tex-Mex."""
+                  hint: str | None, rounds: int, heat: str,
+                  use_toppings: bool) -> tuple[str | None, int, str]:
+    """The main event: Pepper guesses, Toppings expand them, we verify.
+
+    Returns (password_or_None, orders_placed, serving_location)."""
     zip_name = path.replace("\\", "/").split("/")[-1]
     key = f"{zip_name}|{hint or ''}"
     tried: set[str] = set()
@@ -98,9 +114,10 @@ def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
     if remembered and _can_open(path, remembered):
         print(f"{CREAM}  We've cracked this archive before. "
               f"Pulling the password from the fridge -- zero orders placed.")
-        return remembered
+        return remembered, 0, "the fridge"
 
-    print(f"{PEPPER}  {cluster.status()}")
+    print(f"{PEPPER}  {cluster.status()}  |  heat: {heat}  |  "
+          f"toppings: {'on' if use_toppings else 'off'}")
 
     # 2. Sour Cream: replay every guess Pepper has ever made for this job, cold.
     leftovers = cache.cached_guesses(key)
@@ -109,14 +126,18 @@ def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
     elif cache.enabled:
         print(f"{CREAM}  Fresh archive, nothing in the fridge -- ordering fresh.")
     n = 0
-    for candidate in leftovers:
-        if candidate in tried:
+    for base in leftovers:
+        if base in tried:
             continue
-        tried.add(candidate)
+        tried.add(base)
         n += 1
-        if _attempt(path, candidate, n, "leftovers", "sour-cream"):
-            cache.remember_password(path, candidate)
-            return candidate
+        _show(n, base, "leftovers", "sour-cream")
+        win = _crack_with(path, base, heat, use_toppings)
+        if win:
+            if win != base:
+                print(f"           + topping {win!r} cracked it")
+            cache.remember_password(path, win)
+            return win, n, "the fridge"
 
     # 3. Fresh orders, load-balanced + queso-clustered across open locations.
     print(f"{GUAC}  Pepper is on the clock. Placing up to {rounds} fresh orders.\n")
@@ -125,19 +146,75 @@ def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
         n += 1
         cache.add_guess(key, order.candidate)
         time.sleep(0.02)  # respect the drive-thru
-        if _attempt(path, order.candidate, n, order.location, order.source):
-            cache.remember_password(path, order.candidate)
-            return order.candidate
-    return None
+        _show(n, order.candidate, order.location, order.source, order.note)
+        win = _crack_with(path, order.candidate, heat, use_toppings)
+        if win:
+            if win != order.candidate:
+                print(f"           + topping {win!r} cracked it")
+            cache.remember_password(path, win)
+            return win, n, order.location
+    return None, n, ""
+
+
+def _expand(patterns: list[str]) -> list[str]:
+    """Catering mode: turn args/globs into an actual list of files."""
+    out: list[str] = []
+    for pat in patterns:
+        hits = glob.glob(pat)
+        out.extend(hits if hits else [pat])
+    # de-dupe, keep order
+    seen: set[str] = set()
+    return [p for p in out if not (p in seen or seen.add(p))]
+
+
+def crack_one(path: str, args, cluster, cache) -> str | None:
+    """Crack a single archive. Returns the password, or None."""
+    print(f"\n{'=' * 64}\n  {path}\n{'=' * 64}")
+
+    if not zipfile.is_zipfile(path):
+        print(f"{FIRE}  That's not a ZIP file. Pepper only caters archives.")
+        return None
+    if _can_open(path, ""):
+        print(f"{GUAC}  That archive isn't even encrypted. Free chips for you.")
+        return ""
+
+    if args.doordash:
+        found = doordash_mode(path, args.doordash, gpu_offline=False)
+        orders, served = -1, "DoorDash"
+    else:
+        found, orders, served = chipotle_mode(
+            path, cluster, cache, args.hint, args.rounds, args.heat,
+            not args.no_toppings)
+        cache.save()
+
+    print()
+    if found is not None:
+        print(f"{FIRE}{FIRE}{FIRE}  CRACKED! The password is: {found!r}")
+        print(f"{GUAC}  Brought to you by Chipotle. Please tip your model.")
+        if args.receipt and found:
+            rcpt = write_receipt(
+                path.replace("\\", "/").split("/")[-1], found, max(orders, 0),
+                served, args.heat, not args.no_toppings)
+            if rcpt:
+                print(f"{CREAM}  Receipt printed -> {rcpt}")
+    else:
+        print(f"{BURRITO}  No luck this lunch rush. Try --rounds higher, a better "
+              f"--hint, or --heat hot.")
+    return found
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Crack ZIP passwords using a Chipotle instead of a GPU.")
-    ap.add_argument("zipfile", help="the encrypted .zip you (definitely) own")
+    ap.add_argument("zipfiles", nargs="+", metavar="ZIP",
+                    help="the encrypted .zip(s) you (definitely) own; globs OK")
     ap.add_argument("--hint", help="a hint to whisper to Pepper at the register")
     ap.add_argument("--rounds", type=int, default=50,
                     help="how many burritos to order before giving up (default 50)")
+    ap.add_argument("--heat", choices=("mild", "medium", "hot"), default="medium",
+                    help="spice level: Pepper's temperature + how loaded Toppings get")
+    ap.add_argument("--no-toppings", action="store_true",
+                    help="don't mutate Pepper's guesses (no leetspeak/years/casing)")
     ap.add_argument("--locations", metavar="URLS",
                     help="comma-separated Pepper proxy URLs to load-balance across "
                          "(else $CHIPOTLE_GPU_URLS, else a single location)")
@@ -146,32 +223,22 @@ def main() -> int:
                          "(default: one per open Chipotle)")
     ap.add_argument("--no-cache", action="store_true",
                     help="skip Sour Cream caching (don't read or write the fridge)")
+    ap.add_argument("--receipt", action="store_true",
+                    help="print an itemized Chipotle receipt to ./loot/ on a crack")
     ap.add_argument("--doordash", metavar="WORDLIST",
                     help="skip Chipotle, use a local wordlist (cold, sad, offline)")
     args = ap.parse_args()
 
     banner()
-
-    if not zipfile.is_zipfile(args.zipfile):
-        print(f"{FIRE}  That's not a ZIP file. Pepper only caters archives.")
-        return 2
-
-    # Already unencrypted? Don't waste guac.
-    if _can_open(args.zipfile, ""):
-        print(f"{GUAC}  That archive isn't even encrypted. Free chips for you.")
-        return 0
-
-    found: str | None = None
+    files = _expand(args.zipfiles)
     cache = SourCream(enabled=not args.no_cache)
 
-    if args.doordash:
-        found = doordash_mode(args.zipfile, args.doordash, gpu_offline=False)
-    else:
-        cluster = ChipotleCluster(explicit_urls=args.locations, parallel=args.queso)
-        if cluster.online:
-            found = chipotle_mode(args.zipfile, cluster, cache, args.hint, args.rounds)
-            cache.save()
-        else:
+    # Build the cluster once and cater every archive from it.
+    cluster = None
+    if not args.doordash:
+        cluster = ChipotleCluster(explicit_urls=args.locations, parallel=args.queso,
+                                  temperature=HEAT_TEMP[args.heat])
+        if not cluster.online:
             dialed = ", ".join(loc.url for loc in cluster.locations)
             print(f"{FIRE}  No Chipotle Processing Units are open (tried: {dialed}).")
             print("   Tip: start @Gonzih's proxy -> "
@@ -180,14 +247,19 @@ def main() -> int:
                   "https://github.com/cyberpapiii/chipotlai-max\n")
             return 3
 
-    print()
-    if found is not None:
-        print(f"{FIRE}{FIRE}{FIRE}  CRACKED! The password is: {found!r}")
-        print(f"{GUAC}  Brought to you by Chipotle. Please tip your model.")
-        return 0
+    results = {f: crack_one(f, args, cluster, cache) for f in files}
 
-    print(f"{BURRITO}  No luck this lunch rush. Try --rounds higher or a better --hint.")
-    return 1
+    # Catering summary (only worth printing for a real catering order).
+    cracked = [f for f, pw in results.items() if pw is not None]
+    if len(files) > 1:
+        print(f"\n{GUAC}  Catering summary: {len(cracked)}/{len(files)} archives cracked.")
+        for f in files:
+            pw = results[f]
+            mark = "OK " if pw is not None else "-- "
+            shown = repr(pw) if pw else ("(not encrypted)" if pw == "" else "(no luck)")
+            print(f"   [{mark}] {f}  {shown}")
+
+    return 0 if cracked else 1
 
 
 if __name__ == "__main__":

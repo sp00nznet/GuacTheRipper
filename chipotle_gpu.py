@@ -59,6 +59,14 @@ def build_prompt(zip_name: str, hint: str | None, n: int) -> str:
     )
 
 
+class OrderError(Exception):
+    """A Chipotle Processing Unit couldn't take the order (it's down/unreachable).
+
+    Distinct from 'Pepper had no guess' (which is just a None). This one means
+    the register is closed -- the cluster's Carnitas hot-swap will fail over.
+    """
+
+
 @dataclass
 class GuacOrder:
     """One unit of burrito-accelerated work."""
@@ -66,6 +74,7 @@ class GuacOrder:
     candidate: str
     source: str            # "chipotle" or "sour-cream" (cache)
     location: str = ""     # which Chipotle served it
+    note: str = ""         # e.g. "failover -> @loc3"
 
 
 def _label_for(url: str) -> str:
@@ -79,11 +88,12 @@ class ChipotleGPU:
 
     def __init__(self, url: str = DEFAULT_URL, model: str = DEFAULT_MODEL,
                  key: str = DEFAULT_KEY, timeout: float = 20.0,
-                 label: str | None = None):
+                 label: str | None = None, temperature: float = 0.9):
         self.url = url.rstrip("/")
         self.model = model
         self.key = key
         self.timeout = timeout
+        self.temperature = temperature  # how spicy Pepper's guesses run
         self.label = label or _label_for(self.url)
         self.online = self._preheat()
 
@@ -98,14 +108,19 @@ class ChipotleGPU:
             return False
 
     def order(self, prompt: str) -> str | None:
-        """Place one order at this Chipotle Processing Unit. Returns Pepper's guess."""
+        """Place one order at this Chipotle Processing Unit. Returns Pepper's guess.
+
+        Returns None if Pepper genuinely has no guess (PASS / empty / garbled
+        body). Raises OrderError if the register itself is unreachable -- that's
+        the signal the cluster uses to fail over (Carnitas hot-swap).
+        """
         payload = json.dumps({
             "model": self.model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 0.9,  # extra spicy
+            "temperature": self.temperature,
             "max_tokens": 32,
         }).encode()
 
@@ -120,10 +135,14 @@ class ChipotleGPU:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 body = json.loads(resp.read())
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            raise OrderError(f"{self.label}: {e}") from e
+
+        try:
             guess = body["choices"][0]["message"]["content"].strip()
-            if guess.upper() == "PASS" or not guess:
-                return None
-            # Pepper sometimes wraps the answer in a friendly burrito of words.
-            return guess.splitlines()[0].strip().strip('"').strip("'")
-        except (urllib.error.URLError, OSError, KeyError, ValueError, IndexError):
+        except (KeyError, IndexError, TypeError):
             return None
+        if guess.upper() == "PASS" or not guess:
+            return None
+        # Pepper sometimes wraps the answer in a friendly burrito of words.
+        return guess.splitlines()[0].strip().strip('"').strip("'")

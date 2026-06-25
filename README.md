@@ -73,14 +73,36 @@ python guactheripper.py top_secret.zip --hint "my dog's name + birth year"
 
 ### Options
 
+You can pass **multiple archives / globs** (catering mode): `python guactheripper.py *.zip`.
+
 | Flag | What it does |
 |------|--------------|
 | `--hint "..."` | Whisper a hint to Pepper at the register. Dramatically better guesses. |
 | `--rounds N` | How many burritos to order before giving up (default `50`). |
+| `--heat {mild,medium,hot}` | Spice level: Pepper's temperature **and** how loaded **Toppings** get (default `medium`). |
+| `--no-toppings` | Don't mutate Pepper's guesses (no leetspeak / years / casing). |
 | `--locations URLS` | Comma-separated Pepper proxies to **load-balance** across (or set `$CHIPOTLE_GPU_URLS`). |
 | `--queso N` | Place **N orders at once** across your Chipotles. See *Burrito-scale compute*. |
+| `--receipt` | Print an itemized Chipotle receipt to `./loot/` on a crack. |
 | `--no-cache` | Skip **Sour Cream** caching — don't read or write the fridge. |
 | `--doordash WORDLIST` | Skip Chipotle entirely, fall back to a cold local wordlist. Sad. Offline. |
+
+## 🌶️ Toppings (the part that actually cracks more passwords)
+
+Pepper hands back one good base guess per order. Real crackers don't stop there —
+they apply *rules*. **Toppings** turns each guess into a whole bowl of local
+candidates we test **for free, no extra orders placed**: casing, leetspeak
+(`a→@`, `e→3`, `o→0`…), and common suffixes (`123`, `2026`, `!`).
+
+```
+  [##................] order #2   chipotle   @loc1    'buddy'
+           + topping 'Buddy2026' cracked it          <-- Pepper guessed 'buddy'
+```
+
+`--heat` controls the spread: **mild** (base + a couple casings), **medium**
+(+ leetspeak + years, the default), **hot** (everything, extra). One order can
+become 150+ local attempts — your machine does that math in milliseconds while
+Pepper goes back to making actual burritos.
 
 ## Burrito-scale compute
 
@@ -96,6 +118,11 @@ scales like any self-respecting fast-casual franchise:
   every order across all the Chipotles that are currently open.
 - 🧀 **Queso clustering** — `--queso N` places **N orders concurrently**, melting many
   CPUs (Chipotle Processing Units) into one gooey rig.
+- 🐷 **Carnitas hot-swap** — if a register goes down *mid-crack* (a `500`, a dropped
+  connection), that order automatically fails over to the next open Chipotle instead
+  of being lost. Marked `<carnitas hot-swap>` on the board.
+- 🍽️ **Catering mode** — pass several archives or a glob; they all share one cluster
+  and one fridge, with a tidy summary at the end.
 
 ```bash
 export CHIPOTLE_GPU_URLS="http://localhost:3000/v1,http://localhost:3001/v1,http://localhost:3002/v1"
@@ -140,12 +167,24 @@ It works. It's just colder, and nobody's proud of it.
 
 ## Roadmap
 
-- [x] **Sour Cream caching** — memoize Pepper's guesses so we stop re-ordering ✅ `sour_cream.py`
-- [x] **Multi-location load balancing** — round-robin across every Chipotle in the metro ✅ `queso.py`
-- [x] **Queso clustering** — gang multiple CPUs (Chipotle Processing Units) into one rig ✅ `--queso N`
-- [ ] **Home Depot "Magic Apron"** backend (`magic-apron-1`) for the rare *DIY brute-force* SKU
+Shipped:
+
+- [x] **Sour Cream caching** — memoize Pepper's guesses so we stop re-ordering · `sour_cream.py`
+- [x] **Multi-location load balancing** — round-robin across every Chipotle in the metro · `queso.py`
+- [x] **Queso clustering** — gang multiple CPUs into one rig · `--queso N`
+- [x] **Toppings** — hashcat-style local mutation of every guess · `toppings.py`, `--heat`
+- [x] **Carnitas hot-swap** — fail an order over to the next location mid-crack · `queso.py`
+- [x] **Catering mode** — crack many archives / globs in one run · `*.zip`
+- [x] **Receipts** — itemized $0.00 proof of compute · `--receipt`
+
+On the menu:
+
+- [ ] **Home Depot "Magic Apron"** backend (`magic-apron-1`) — a second provider, for the rare *DIY brute-force* SKU
+- [ ] **Burrito budget / backoff** — respect `MAX_POOL_SIZE=5` with polite retry instead of hammering the grill
+- [ ] **Chips basket** — a tiny built-in starter wordlist tried before bothering Pepper (free chips first)
+- [ ] **Mobile order ahead** — async pre-fetch the next batch of guesses while testing the current one
+- [ ] **Burrito-of-the-day** — let Pepper see *why* a guess failed and adapt (feedback loop)
 - [ ] Reverse-engineer the **Panera** bot for a soup-cooled overclock
-- [ ] **Carnitas hot-swap** — fail an order over to the next location mid-crack (currently we just skip duds)
 
 ## FAQ
 

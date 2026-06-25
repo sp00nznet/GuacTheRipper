@@ -67,28 +67,31 @@ for a in art:
     y += LH
 blank()
 line([("$ ", DIM),
-      ("python guactheripper.py top_secret.zip --hint \"dog + birthyear\" --queso 3", WHITE)])
+      ("python guactheripper.py top_secret.zip --hint \"dog + birthyear\" --queso 3 --heat hot", WHITE)])
 blank()
-line([("[ CPU ]", RED), ("  3/3 Chipotle Processing Unit(s) open, queso x3", RED)])
+line([("[ CPU ]", RED), ("  3/3 Chipotle Processing Unit(s) open, queso x3  |  heat: hot  |  toppings: on", RED)])
 line([("[cream]", CREAMC), ("  Fresh archive, nothing in the fridge -- ordering fresh.", CREAMC)])
 line([("[guac]", GREEN), ("  Pepper is on the clock. Placing up to 50 fresh orders across 3 locations.", GREEN)])
 blank()
 
-# (bar fill, order#, location, guess)
+# (bar fill, order#, location, guess, note)
 orders = [
-    (1, "01", "@loc1", "Buddy2014"),
-    (2, "02", "@loc2", "rex1998!"),
-    (3, "03", "@loc3", "Max2012"),
-    (4, "04", "@loc1", "P@ssw0rd"),
-    (7, "07", "@loc3", "guacIsExtra"),
+    (1, "01", "@loc1", "Buddy2014", ""),
+    (2, "02", "@loc2", "rex1998!", ""),
+    (3, "03", "@loc3", "Max2012", "carnitas hot-swap"),
+    (4, "04", "@loc1", "buddy", ""),
 ]
-for fill, num, loc, guess in orders:
+for fill, num, loc, guess, note in orders:
     bar = "#" * fill + "." * (18 - fill)
-    line([("  [", DIM), (bar, YELLOW), ("] ", DIM),
-          (f"order #{num}  ", GREY), ("chipotle ", DIM), (f"{loc:<7}", YELLOW),
-          (" Pepper says: ", WHITE), (f"{guess!r}", RED)])
+    segs = [("  [", DIM), (bar, YELLOW), ("] ", DIM),
+            (f"order #{num}  ", GREY), ("chipotle ", DIM), (f"{loc:<7}", YELLOW),
+            (" Pepper says: ", WHITE), (f"{guess!r}", RED)]
+    if note:
+        segs.append((f"  <{note}>", CREAMC))
+    line(segs)
+line([("           + topping ", DIM), ("'Buddy2026'", GREEN), (" cracked it", DIM)])
 blank()
-line([("  *** CRACKED *** ", RED), ("the password is: ", WHITE), ("'guacIsExtra'", GREEN)])
+line([("  *** CRACKED *** ", RED), ("the password is: ", WHITE), ("'Buddy2026'", GREEN)])
 line([("[guac]", GREEN), ("  Brought to you by Chipotle. Please tip your model.", GREEN)])
 blank()
 line([("─" * 62, DIM)])
