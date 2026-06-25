@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -88,12 +90,17 @@ class ChipotleGPU:
 
     def __init__(self, url: str = DEFAULT_URL, model: str = DEFAULT_MODEL,
                  key: str = DEFAULT_KEY, timeout: float = 20.0,
-                 label: str | None = None, temperature: float = 0.9):
+                 label: str | None = None, temperature: float = 0.9,
+                 system_prompt: str = SYSTEM_PROMPT,
+                 retries: int = 2, backoff: float = 0.4):
         self.url = url.rstrip("/")
         self.model = model
         self.key = key
         self.timeout = timeout
         self.temperature = temperature  # how spicy Pepper's guesses run
+        self.system_prompt = system_prompt
+        self.retries = retries          # polite re-orders when rate-limited
+        self.backoff = backoff          # base seconds for exponential backoff
         self.label = label or _label_for(self.url)
         self.online = self._preheat()
 
@@ -117,7 +124,7 @@ class ChipotleGPU:
         payload = json.dumps({
             "model": self.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": prompt},
             ],
             "temperature": self.temperature,
@@ -132,11 +139,26 @@ class ChipotleGPU:
                 "Authorization": f"Bearer {self.key}",
             },
         )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                body = json.loads(resp.read())
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            raise OrderError(f"{self.label}: {e}") from e
+
+        # Burrito budget / backoff: a busy grill (429/503/502) gets a polite,
+        # exponentially-backed-off re-order rather than a stampede. A register
+        # that's actually down raises OrderError so the cluster can fail over.
+        body = None
+        for attempt in range(self.retries + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    body = json.loads(resp.read())
+                break
+            except urllib.error.HTTPError as e:
+                if e.code in (429, 502, 503) and attempt < self.retries:
+                    time.sleep(self.backoff * (2 ** attempt)
+                               + random.uniform(0, self.backoff))
+                    continue
+                raise OrderError(f"{self.label}: HTTP {e.code}") from e
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                raise OrderError(f"{self.label}: {e}") from e
+        if body is None:
+            raise OrderError(f"{self.label}: rate-limited after {self.retries} re-orders")
 
         try:
             guess = body["choices"][0]["message"]["content"].strip()

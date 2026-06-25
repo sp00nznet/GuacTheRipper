@@ -81,11 +81,14 @@ You can pass **multiple archives / globs** (catering mode): `python guactherippe
 | `--rounds N` | How many burritos to order before giving up (default `50`). |
 | `--heat {mild,medium,hot}` | Spice level: Pepper's temperature **and** how loaded **Toppings** get (default `medium`). |
 | `--no-toppings` | Don't mutate Pepper's guesses (no leetspeak / years / casing). |
-| `--locations URLS` | Comma-separated Pepper proxies to **load-balance** across (or set `$CHIPOTLE_GPU_URLS`). |
-| `--queso N` | Place **N orders at once** across your Chipotles. See *Burrito-scale compute*. |
-| `--receipt` | Print an itemized Chipotle receipt to `./loot/` on a crack. |
+| `--no-chips` | Skip the free **Chips basket** of common passwords. |
+| `--provider {chipotle,homedepot}` | Which retail support bot does your compute (default `chipotle`). |
+| `--budget N` | Max **total Pepper orders** for the whole run. Local work stays free. |
+| `--locations URLS` | Comma-separated proxies to **load-balance** across (or set `$CHIPOTLE_GPU_URLS`). |
+| `--queso N` | Place **N orders at once** across your locations. See *Burrito-scale compute*. |
+| `--receipt` | Print an itemized receipt to `./loot/` on a crack. |
 | `--no-cache` | Skip **Sour Cream** caching — don't read or write the fridge. |
-| `--doordash WORDLIST` | Skip Chipotle entirely, fall back to a cold local wordlist. Sad. Offline. |
+| `--doordash WORDLIST` | Skip the bot entirely, fall back to a cold local wordlist. Sad. Offline. |
 
 ## 🌶️ Toppings (the part that actually cracks more passwords)
 
@@ -123,6 +126,31 @@ scales like any self-respecting fast-casual franchise:
   of being lost. Marked `<carnitas hot-swap>` on the board.
 - 🍽️ **Catering mode** — pass several archives or a glob; they all share one cluster
   and one fridge, with a tidy summary at the end.
+- 🧾 **Burrito budget & polite backoff** — `--budget N` caps total orders for the whole
+  run (shared across every archive). And because the proxy throttles anonymous sessions,
+  a busy grill (`429`/`503`) gets an exponential, jittered **re-order** instead of a
+  stampede. Don't be the customer who yells at the staff.
+- 🛒 **Mobile order-ahead** — the next batch of guesses is always cooking *while* your
+  machine tests the last one, so the proxies are never idle waiting on local crypto.
+- 🥔 **Chips basket** — before spending a single order, we munch a built-in basket of
+  ~40 passwords people actually use (`password`, `qwerty`, `guacamole`...). Weak
+  archives fall for **zero orders placed**.
+
+### Different franchise, same trick
+
+Chipotle isn't the only retailer with a chatty support bot. `--provider` swaps the whole
+backend — persona, model id, default endpoint, even the receipt branding:
+
+```bash
+python guactheripper.py top_secret.zip --provider homedepot   # Magic Apron, model magic-apron-1
+```
+
+```
+[ CPU ]  1/1 Apron Processing Unit(s) open via Home Depot (Magic Apron), queso x1
+[guac]   Magic Apron is on the clock. Placing up to 50 fresh orders (ordering ahead).
+```
+
+Adding your own is a one-liner in `providers.py`. The compute is out there.
 
 ```bash
 export CHIPOTLE_GPU_URLS="http://localhost:3000/v1,http://localhost:3001/v1,http://localhost:3002/v1"
@@ -176,14 +204,16 @@ Shipped:
 - [x] **Carnitas hot-swap** — fail an order over to the next location mid-crack · `queso.py`
 - [x] **Catering mode** — crack many archives / globs in one run · `*.zip`
 - [x] **Receipts** — itemized $0.00 proof of compute · `--receipt`
+- [x] **Burrito budget & backoff** — cap orders, retry politely on throttle · `--budget`, `budget.py`
+- [x] **Mobile order-ahead** — next batch cooks while you test the last · `queso.py`
+- [x] **Chips basket** — free common-password starter, no orders · `chips.py`
+- [x] **Home Depot "Magic Apron"** — pluggable second provider · `--provider`, `providers.py`
 
 On the menu:
 
-- [ ] **Home Depot "Magic Apron"** backend (`magic-apron-1`) — a second provider, for the rare *DIY brute-force* SKU
-- [ ] **Burrito budget / backoff** — respect `MAX_POOL_SIZE=5` with polite retry instead of hammering the grill
-- [ ] **Chips basket** — a tiny built-in starter wordlist tried before bothering Pepper (free chips first)
-- [ ] **Mobile order ahead** — async pre-fetch the next batch of guesses while testing the current one
-- [ ] **Burrito-of-the-day** — let Pepper see *why* a guess failed and adapt (feedback loop)
+- [ ] **Burrito-of-the-day** — let the bot see *why* a guess failed and adapt (feedback loop)
+- [ ] **More providers** — IKEA, Sephora, Lowe's; turn the metro into a compute grid
+- [ ] **Sticker book** — earn a loyalty stamp per crack; free crack after ten
 - [ ] Reverse-engineer the **Panera** bot for a soup-cooled overclock
 
 ## FAQ

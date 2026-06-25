@@ -30,6 +30,9 @@ import sys
 import time
 import zipfile
 
+from budget import Budget
+from chips import BASKET
+from providers import PROVIDERS
 from queso import ChipotleCluster
 from receipts import write_receipt
 from sour_cream import SourCream
@@ -45,6 +48,7 @@ GUAC = "[guac]"
 PEPPER = "[ CPU ]"     # Chipotle Processing Unit
 FIRE = "***"
 CREAM = "[cream]"      # sour cream cache
+CHIPS = "[chips]"      # the free chips basket
 
 
 def banner() -> None:
@@ -100,14 +104,16 @@ def _show(n: int, base: str, label: str, source: str, note: str = "") -> None:
 
 
 def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
-                  hint: str | None, rounds: int, heat: str,
-                  use_toppings: bool) -> tuple[str | None, int, str]:
-    """The main event: Pepper guesses, Toppings expand them, we verify.
+                  hint: str | None, rounds: int, heat: str, use_toppings: bool,
+                  use_chips: bool, budget: Budget) -> tuple[str | None, int, str]:
+    """The main event: chips, then the fridge, then Pepper guesses + Toppings.
 
     Returns (password_or_None, orders_placed, serving_location)."""
     zip_name = path.replace("\\", "/").split("/")[-1]
     key = f"{zip_name}|{hint or ''}"
+    bot = cluster.provider.bot
     tried: set[str] = set()
+    orders_placed = 0  # only counts real Pepper orders (chips/leftovers are free)
 
     # 1. Sour Cream: have we already cracked THIS exact archive? Instant guac.
     remembered = cache.remembered_password(path)
@@ -119,12 +125,24 @@ def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
     print(f"{PEPPER}  {cluster.status()}  |  heat: {heat}  |  "
           f"toppings: {'on' if use_toppings else 'off'}")
 
-    # 2. Sour Cream: replay every guess Pepper has ever made for this job, cold.
+    # 2. Chips basket: free common passwords, tried locally before any order.
+    if use_chips:
+        print(f"{CHIPS}  Munching the free chips basket ({len(BASKET)} usual "
+              f"suspects) before bothering {bot}...")
+        for chip in BASKET:
+            if chip in tried:
+                continue
+            tried.add(chip)
+            win = _crack_with(path, chip, heat, use_toppings)
+            if win:
+                print(f"{CHIPS}  A chip cracked it: {win!r} -- zero orders placed.")
+                cache.remember_password(path, win)
+                return win, 0, "the chips basket"
+
+    # 3. Sour Cream: replay every guess Pepper has ever made for this job, cold.
     leftovers = cache.cached_guesses(key)
     if leftovers:
         print(f"{CREAM}  Replaying {len(leftovers)} cached guess(es) before ordering fresh.")
-    elif cache.enabled:
-        print(f"{CREAM}  Fresh archive, nothing in the fridge -- ordering fresh.")
     n = 0
     for base in leftovers:
         if base in tried:
@@ -137,13 +155,19 @@ def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
             if win != base:
                 print(f"           + topping {win!r} cracked it")
             cache.remember_password(path, win)
-            return win, n, "the fridge"
+            return win, 0, "the fridge"
 
-    # 3. Fresh orders, load-balanced + queso-clustered across open locations.
-    print(f"{GUAC}  Pepper is on the clock. Placing up to {rounds} fresh orders.\n")
-    for order in cluster.guesses(zip_name, hint, rounds, exclude=tried):
+    # 4. Fresh orders: load-balanced, queso-clustered, ordering ahead.
+    if budget.exhausted():
+        print(f"{GUAC}  Burrito budget already spent -- no fresh orders this run.")
+        return None, 0, ""
+    cap = min(rounds, budget.remaining()) if budget.remaining() is not None else rounds
+    print(f"{GUAC}  {bot} is on the clock. Placing up to {cap} fresh orders "
+          f"(ordering ahead).\n")
+    for order in cluster.guesses(zip_name, hint, rounds, exclude=tried, budget=budget):
         tried.add(order.candidate)
         n += 1
+        orders_placed += 1
         cache.add_guess(key, order.candidate)
         time.sleep(0.02)  # respect the drive-thru
         _show(n, order.candidate, order.location, order.source, order.note)
@@ -152,8 +176,12 @@ def chipotle_mode(path: str, cluster: ChipotleCluster, cache: SourCream,
             if win != order.candidate:
                 print(f"           + topping {win!r} cracked it")
             cache.remember_password(path, win)
-            return win, n, order.location
-    return None, n, ""
+            return win, orders_placed, order.location
+
+    if budget.exhausted():
+        print(f"{BURRITO}  Burrito budget spent ({budget.spent} orders). "
+              f"Raise --budget to keep ordering.")
+    return None, orders_placed, ""
 
 
 def _expand(patterns: list[str]) -> list[str]:
@@ -167,12 +195,13 @@ def _expand(patterns: list[str]) -> list[str]:
     return [p for p in out if not (p in seen or seen.add(p))]
 
 
-def crack_one(path: str, args, cluster, cache) -> str | None:
+def crack_one(path: str, args, cluster, cache, budget: Budget) -> str | None:
     """Crack a single archive. Returns the password, or None."""
     print(f"\n{'=' * 64}\n  {path}\n{'=' * 64}")
+    brand = cluster.provider.label if cluster else "the neighborhood"
 
     if not zipfile.is_zipfile(path):
-        print(f"{FIRE}  That's not a ZIP file. Pepper only caters archives.")
+        print(f"{FIRE}  That's not a ZIP file. {brand} only caters archives.")
         return None
     if _can_open(path, ""):
         print(f"{GUAC}  That archive isn't even encrypted. Free chips for you.")
@@ -180,26 +209,29 @@ def crack_one(path: str, args, cluster, cache) -> str | None:
 
     if args.doordash:
         found = doordash_mode(path, args.doordash, gpu_offline=False)
-        orders, served = -1, "DoorDash"
+        orders, served = 0, "DoorDash"
     else:
         found, orders, served = chipotle_mode(
             path, cluster, cache, args.hint, args.rounds, args.heat,
-            not args.no_toppings)
+            not args.no_toppings, not args.no_chips, budget)
         cache.save()
 
     print()
     if found is not None:
         print(f"{FIRE}{FIRE}{FIRE}  CRACKED! The password is: {found!r}")
-        print(f"{GUAC}  Brought to you by Chipotle. Please tip your model.")
+        print(f"{GUAC}  Brought to you by {brand}. Please tip your model.")
         if args.receipt and found:
+            prov = cluster.provider if cluster else None
             rcpt = write_receipt(
                 path.replace("\\", "/").split("/")[-1], found, max(orders, 0),
-                served, args.heat, not args.no_toppings)
+                served, args.heat, not args.no_toppings,
+                served_by=(prov.bot if prov else "the driver"),
+                title=(prov.receipt_title if prov else "DOORDASH"))
             if rcpt:
                 print(f"{CREAM}  Receipt printed -> {rcpt}")
     else:
         print(f"{BURRITO}  No luck this lunch rush. Try --rounds higher, a better "
-              f"--hint, or --heat hot.")
+              f"--hint, --heat hot, or a bigger --budget.")
     return found
 
 
@@ -215,39 +247,48 @@ def main() -> int:
                     help="spice level: Pepper's temperature + how loaded Toppings get")
     ap.add_argument("--no-toppings", action="store_true",
                     help="don't mutate Pepper's guesses (no leetspeak/years/casing)")
+    ap.add_argument("--no-chips", action="store_true",
+                    help="skip the free chips basket of common passwords")
+    ap.add_argument("--provider", choices=tuple(PROVIDERS), default="chipotle",
+                    help="which retail support bot to use for compute (default chipotle)")
+    ap.add_argument("--budget", type=int, metavar="N",
+                    help="max total Pepper orders for the whole run (default: unlimited). "
+                         "Local work (chips/toppings/cache) is always free.")
     ap.add_argument("--locations", metavar="URLS",
-                    help="comma-separated Pepper proxy URLs to load-balance across "
-                         "(else $CHIPOTLE_GPU_URLS, else a single location)")
+                    help="comma-separated proxy URLs to load-balance across "
+                         "(else $CHIPOTLE_GPU_URLS, else the provider default)")
     ap.add_argument("--queso", type=int, metavar="N",
                     help="how many orders to place CONCURRENTLY across locations "
-                         "(default: one per open Chipotle)")
+                         "(default: one per open location)")
     ap.add_argument("--no-cache", action="store_true",
                     help="skip Sour Cream caching (don't read or write the fridge)")
     ap.add_argument("--receipt", action="store_true",
-                    help="print an itemized Chipotle receipt to ./loot/ on a crack")
+                    help="print an itemized receipt to ./loot/ on a crack")
     ap.add_argument("--doordash", metavar="WORDLIST",
-                    help="skip Chipotle, use a local wordlist (cold, sad, offline)")
+                    help="skip the bot, use a local wordlist (cold, sad, offline)")
     args = ap.parse_args()
 
     banner()
     files = _expand(args.zipfiles)
     cache = SourCream(enabled=not args.no_cache)
+    budget = Budget(args.budget)  # shared across the whole catering order
 
     # Build the cluster once and cater every archive from it.
     cluster = None
     if not args.doordash:
+        provider = PROVIDERS[args.provider]
         cluster = ChipotleCluster(explicit_urls=args.locations, parallel=args.queso,
-                                  temperature=HEAT_TEMP[args.heat])
+                                  temperature=HEAT_TEMP[args.heat], provider=provider)
         if not cluster.online:
             dialed = ", ".join(loc.url for loc in cluster.locations)
-            print(f"{FIRE}  No Chipotle Processing Units are open (tried: {dialed}).")
+            print(f"{FIRE}  No {provider.unit}s are open (tried: {dialed}).")
             print("   Tip: start @Gonzih's proxy -> "
                   "https://github.com/Gonzih/chipotle-llm-provider")
             print("   ...or the chipotlai-max bundle -> "
                   "https://github.com/cyberpapiii/chipotlai-max\n")
             return 3
 
-    results = {f: crack_one(f, args, cluster, cache) for f in files}
+    results = {f: crack_one(f, args, cluster, cache, budget) for f in files}
 
     # Catering summary (only worth printing for a real catering order).
     cracked = [f for f, pw in results.items() if pw is not None]

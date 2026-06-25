@@ -13,13 +13,14 @@ LOOT_DIR = os.environ.get("CHIPOTLE_LOOT", "loot")
 
 def write_receipt(zip_name: str, password: str, orders: int, location: str,
                   heat: str, toppings_on: bool, served_by: str = "Pepper",
+                  title: str = "CHIPOTLE MEXICAN GRILL",
                   loot_dir: str = LOOT_DIR) -> str | None:
-    """Write a Chipotle-style receipt for a crack. Returns the path, or None."""
+    """Write a brand-stamped receipt for a crack. Returns the path, or None."""
     pad = lambda left, right: f" {left:<26}{right:>11} "
 
     lines = [
         "  +--------------------------------------+",
-        "  |          CHIPOTLE MEXICAN GRILL       |",
+        "  |" + title.center(38) + "|",
         "  |        ~ Processing Unit #4090 ~      |",
         "  +--------------------------------------+",
         "",
